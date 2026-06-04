@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using BepInEx;
 using BepInEx.Configuration;
@@ -9,9 +10,13 @@ using UnityEngine;
 
 namespace SurfaceLoadout
 {
-    [BepInPlugin("com.RaksaPutra.SurfaceLoadout", "Surface Loadout", "1.0.0")]
+    [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class SurfaceLoadoutPlugin : BaseUnityPlugin
     {
+        public const string PluginGuid = "surface.loadout";
+        public const string PluginName = "Surface Loadout";
+        public const string PluginVersion = "2.1.0"; // permanent
+
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
         private List<string> missileNames;
@@ -35,6 +40,32 @@ namespace SurfaceLoadout
         private void Awake()
         {
             Instance = this;
+
+            // Config Migration to new GUID
+            string newCfgPath = Path.Combine(BepInEx.Paths.ConfigPath, "surface.loadout.cfg");
+            try
+            {
+                var oldConfigs = Directory.GetFiles(BepInEx.Paths.ConfigPath, "*SurfaceLoadout.cfg");
+                foreach (var oldCfgPath in oldConfigs)
+                {
+                    if (!oldCfgPath.Equals(newCfgPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!File.Exists(newCfgPath))
+                        {
+                            File.Copy(oldCfgPath, newCfgPath);
+                        }
+                        File.Delete(oldCfgPath);
+                        Logger.LogInfo($"Successfully migrated and deleted old configuration file: {Path.GetFileName(oldCfgPath)}");
+                    }
+                }
+                // Reload config in case it was migrated
+                Config.Reload();
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"Error migrating old config: {e.Message}");
+            }
+
             StartCoroutine(InitLoadouts());
         }
 
@@ -66,12 +97,18 @@ namespace SurfaceLoadout
 
             int moddedCount = 0;
 
-            foreach (var unitDef in units)
+            // Filter out unsupported units and sort alphabetically to ensure alphabetical config categories
+            var sortedUnits = units.Where(u => !(u is AircraftDefinition || u is MissileDefinition) && u.unitPrefab != null)
+                                   .OrderBy(u => {
+                                       string pName = u.unitPrefab != null ? u.unitPrefab.name : u.name;
+                                       return string.IsNullOrEmpty(u.unitName) ? pName : $"{u.unitName} ({pName})";
+                                   })
+                                   .ToList();
+
+            foreach (var unitDef in sortedUnits)
             {
-                if (unitDef is AircraftDefinition || unitDef is MissileDefinition) continue;
-                if (unitDef.unitPrefab == null) continue;
-                
                 var prefabLaunchers = unitDef.unitPrefab.GetComponentsInChildren<MissileLauncher>(true);
+                
                 if (prefabLaunchers.Length == 0) continue;
 
                 string pName = unitDef.unitPrefab != null ? unitDef.unitPrefab.name : unitDef.name;
