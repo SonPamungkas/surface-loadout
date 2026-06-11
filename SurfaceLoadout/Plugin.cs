@@ -15,7 +15,7 @@ namespace SurfaceLoadout
     {
         public const string PluginGuid = "surface.loadout";
         public const string PluginName = "Surface Loadout";
-        public const string PluginVersion = "2.1.0"; // permanent
+        public const string PluginVersion = "2.2.0"; // permanent
 
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
@@ -31,8 +31,10 @@ namespace SurfaceLoadout
         public string GetMissileDisplayName(MissileDefinition m)
         {
             if (m == null) return "None";
-            string pName = m.unitPrefab != null ? m.unitPrefab.name : m.name;
-            return string.IsNullOrEmpty(m.unitName) ? pName : $"{m.unitName} ({pName})";
+            string key = string.IsNullOrEmpty(m.jsonKey) ? (m.unitPrefab != null ? m.unitPrefab.name : m.name) : m.jsonKey;
+            string rawName = string.IsNullOrEmpty(m.unitName) ? key : $"{m.unitName} ({key})";
+            if (rawName.Length > 40) return rawName.Substring(0, 37) + "...";
+            return rawName;
         }
 
         public Dictionary<string, Dictionary<string, LauncherConfig>> UnitConfigs = new Dictionary<string, Dictionary<string, LauncherConfig>>();
@@ -100,9 +102,9 @@ namespace SurfaceLoadout
             // Filter out unsupported units and sort alphabetically to ensure alphabetical config categories
             var sortedUnits = units.Where(u => !(u is AircraftDefinition || u is MissileDefinition) && u.unitPrefab != null)
                                    .OrderBy(u => {
-                                       string pName = u.unitPrefab != null ? u.unitPrefab.name : u.name;
-                                       return string.IsNullOrEmpty(u.unitName) ? pName : $"{u.unitName} ({pName})";
-                                   })
+                                       string key = string.IsNullOrEmpty(u.jsonKey) ? (u.unitPrefab != null ? u.unitPrefab.name : u.name) : u.jsonKey;
+                                       return string.IsNullOrEmpty(u.unitName) ? key : $"{u.unitName} ({key})";
+                                   }, StringComparer.OrdinalIgnoreCase)
                                    .ToList();
 
             foreach (var unitDef in sortedUnits)
@@ -111,8 +113,8 @@ namespace SurfaceLoadout
                 
                 if (prefabLaunchers.Length == 0) continue;
 
-                string pName = unitDef.unitPrefab != null ? unitDef.unitPrefab.name : unitDef.name;
-                string configCategory = string.IsNullOrEmpty(unitDef.unitName) ? pName : $"{unitDef.unitName} ({pName})";
+                string key = string.IsNullOrEmpty(unitDef.jsonKey) ? (unitDef.unitPrefab != null ? unitDef.unitPrefab.name : unitDef.name) : unitDef.jsonKey;
+                string configCategory = string.IsNullOrEmpty(unitDef.unitName) ? key : $"{unitDef.unitName} ({key})";
 
                 UnitConfigs[unitDef.name] = new Dictionary<string, LauncherConfig>();
 
