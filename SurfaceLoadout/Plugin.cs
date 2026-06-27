@@ -21,6 +21,111 @@ namespace SurfaceLoadout
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
         private List<string> missileNames;
+        public static bool isConfigsInitialized = false;
+
+        public class SurfaceLoadoutPreset
+        {
+            public string section;
+            public string key;
+            public string value;
+        }
+
+        public void LoadFromJson()
+        {
+            try
+            {
+                if (Config == null) return;
+                string baseDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "SurfaceLoadout");
+                if (!System.IO.Directory.Exists(baseDir)) return;
+
+                int count = 0;
+                var prop = typeof(ConfigFile).GetProperty("OrphanedEntries", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var orphaned = prop?.GetValue(Config) as Dictionary<ConfigDefinition, string>;
+
+                if (orphaned != null)
+                {
+                    foreach (string file in System.IO.Directory.GetFiles(baseDir, "*.json", System.IO.SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            string json = System.IO.File.ReadAllText(file);
+                            var preset = UnityEngine.JsonUtility.FromJson<SurfaceLoadoutPreset>(json);
+                            if (preset != null && !string.IsNullOrEmpty(preset.section) && !string.IsNullOrEmpty(preset.key))
+                            {
+                                var def = new ConfigDefinition(preset.section, preset.key);
+                                if (!orphaned.ContainsKey(def))
+                                {
+                                    orphaned[def] = preset.value;
+                                    count++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError($"Failed to parse {file}: {ex.Message}");
+                        }
+                    }
+                    Logger.LogInfo($"SurfaceLoadout: Successfully loaded {count} config backups from SurfaceLoadout folder!");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("Failed to load SurfaceLoadout json: " + ex);
+            }
+        }
+
+        private static string SafeFileName(string name) => string.Join("_", (name ?? "").Split(System.IO.Path.GetInvalidFileNameChars()));
+
+        public void SaveToJson()
+        {
+            if (Instance == null || Instance.Config == null || !isConfigsInitialized) return;
+            try
+            {
+                string baseDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "SurfaceLoadout");
+                System.IO.Directory.CreateDirectory(baseDir);
+
+                var entries = new Dictionary<ConfigDefinition, string>();
+                foreach (var def in Instance.Config.Keys)
+                {
+                    entries[def] = Instance.Config[def].GetSerializedValue();
+                }
+
+                var prop = typeof(ConfigFile).GetProperty("OrphanedEntries", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (prop != null)
+                {
+                    var orphaned = prop.GetValue(Instance.Config) as Dictionary<ConfigDefinition, string>;
+                    if (orphaned != null)
+                    {
+                        foreach (var def in orphaned.Keys)
+                        {
+                            entries[def] = orphaned[def];
+                        }
+                    }
+                }
+
+                foreach (var kvp in entries)
+                {
+                    var def = kvp.Key;
+                    string val = kvp.Value;
+
+                    string sectionName = def.Section;
+                    string folderName = SafeFileName(sectionName);
+                    string fileName = SafeFileName(def.Key) + ".json";
+
+                    string targetDir = System.IO.Path.Combine(baseDir, folderName);
+                    System.IO.Directory.CreateDirectory(targetDir);
+
+                    string filePath = System.IO.Path.Combine(targetDir, fileName);
+                    var preset = new SurfaceLoadoutPreset { section = def.Section, key = def.Key, value = val };
+                    string json = UnityEngine.JsonUtility.ToJson(preset, true);
+                    System.IO.File.WriteAllText(filePath, json);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("Failed to save to SurfaceLoadout folder: " + ex);
+            }
+        }
 
         public class LauncherConfig
         {
@@ -43,6 +148,10 @@ namespace SurfaceLoadout
         private void Awake()
         {
             Instance = this;
+
+            LoadFromJson();
+
+            Config.SettingChanged += (sender, args) => { SaveToJson(); };
 
             // Config Migration to new GUID
             string newCfgPath = Path.Combine(BepInEx.Paths.ConfigPath, "surface.loadout.cfg");
@@ -198,6 +307,9 @@ namespace SurfaceLoadout
             }
 
             Logger.LogInfo($"Surface Loadout initialized. Modded {moddedCount} surface units. Found {allMissiles.Count} projectiles.");
+            
+            isConfigsInitialized = true;
+            SaveToJson();
         }
 
         public void ApplyToUnit(UnitDefinition unitDef)
