@@ -10,6 +10,7 @@ using UnityEngine;
 
 namespace SurfaceLoadout
 {
+    [BepInDependency("com.offiry.qol", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class SurfaceLoadoutPlugin : BaseUnityPlugin
     {
