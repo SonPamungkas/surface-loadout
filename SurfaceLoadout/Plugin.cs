@@ -16,7 +16,7 @@ namespace SurfaceLoadout
     {
         public const string PluginGuid = "surface.loadout";
         public const string PluginName = "Surface Loadout";
-        public const string PluginVersion = "2.2.0"; // permanent
+        public const string PluginVersion = "2.2.0"; 
 
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
@@ -153,7 +153,7 @@ namespace SurfaceLoadout
 
             Config.SettingChanged += (sender, args) => { SaveToJson(); };
 
-            // Config Migration to new GUID
+            
             string newCfgPath = Path.Combine(BepInEx.Paths.ConfigPath, "surface.loadout.cfg");
             try
             {
@@ -170,7 +170,7 @@ namespace SurfaceLoadout
                         Logger.LogInfo($"Successfully migrated and deleted old configuration file: {Path.GetFileName(oldCfgPath)}");
                     }
                 }
-                // Reload config in case it was migrated
+                
                 Config.Reload();
             }
             catch (Exception e)
@@ -209,7 +209,7 @@ namespace SurfaceLoadout
 
             int moddedCount = 0;
 
-            // Filter out unsupported units and sort alphabetically to ensure alphabetical config categories
+            
             var sortedUnits = units.Where(u => !(u is AircraftDefinition || u is MissileDefinition) && u.unitPrefab != null)
                                    .OrderBy(u => {
                                        string key = string.IsNullOrEmpty(u.jsonKey) ? (u.unitPrefab != null ? u.unitPrefab.name : u.name) : u.jsonKey;
@@ -230,13 +230,13 @@ namespace SurfaceLoadout
 
                 List<LauncherInfo> launcherInfos = new List<LauncherInfo>();
                 
-                // Process MissileLaunchers
+                
                 for (int i = 0; i < prefabLaunchers.Length; i++)
                 {
                     string mName = prefabLaunchers[i].missile != null ? GetMissileDisplayName(prefabLaunchers[i].missile) : "None";
                     
                     var t = Traverse.Create(prefabLaunchers[i]);
-                    int calculatedAmmo = t.Field<int>("maxAmmo").Value;
+                    int calculatedAmmo = prefabLaunchers[i].ammo;
                     if (calculatedAmmo == 0)
                     {
                         var transforms = t.Field<Transform[]>("launchTransforms").Value;
@@ -319,7 +319,7 @@ namespace SurfaceLoadout
 
             if (UnitConfigs.TryGetValue(uName, out var launcherConfigs))
             {
-                // 1. Update Prefab
+                
                 if (unitDef.unitPrefab != null)
                 {
                     var prefabLaunchers = unitDef.unitPrefab.GetComponentsInChildren<MissileLauncher>(true);
@@ -351,7 +351,7 @@ namespace SurfaceLoadout
                     }
                 }
 
-                // 2. Update Active Units
+                
                 foreach (var activeUnit in FindObjectsOfType<Unit>())
                 {
                     if (activeUnit.definition != null && activeUnit.definition.name == uName)
@@ -384,9 +384,20 @@ namespace SurfaceLoadout
                                 Traverse.Create(launcher).Field("maxAmmo").SetValue(config.MaxAmmo.Value);
                                 Traverse.Create(launcher).Field("ammo").SetValue(config.MaxAmmo.Value);
                                 
-                                try {
-                                    Traverse.Create(launcher).Method("Rearm").GetValue();
-                                } catch { }
+                                
+                                if (activeUnit.weaponStations != null)
+                                {
+                                    foreach (var station in activeUnit.weaponStations)
+                                    {
+                                        if (station != null && station.Weapons != null && station.Weapons.Contains(launcher))
+                                        {
+                                            station.AssessAmmo();   
+                                            station.AccountAmmo();  
+                                            station.Updated();      
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
