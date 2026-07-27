@@ -10,13 +10,12 @@ using UnityEngine;
 
 namespace SurfaceLoadout
 {
-    [BepInDependency("com.offiry.qol", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class SurfaceLoadoutPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "surface.loadout";
+        public const string PluginGuid = "neutral.surface.loadout";
         public const string PluginName = "Surface Loadout";
-        public const string PluginVersion = "2.2.0"; 
+        public const string PluginVersion = "2.3.0"; 
 
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
