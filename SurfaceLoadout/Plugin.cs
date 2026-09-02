@@ -7,7 +7,6 @@ using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
-
 namespace SurfaceLoadout
 {
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
@@ -15,20 +14,19 @@ namespace SurfaceLoadout
     {
         public const string PluginGuid = "neutral.surface.loadout";
         public const string PluginName = "Surface Loadout";
-        public const string PluginVersion = "2.3.0"; 
-
+        public const string PluginVersion = "2.3.3"; 
         public static SurfaceLoadoutPlugin Instance;
         private List<MissileDefinition> allMissiles;
         private List<string> missileNames;
         public static bool isConfigsInitialized = false;
-
+        private static bool blueprinterDone = false;
+        private int lastMissileCount = -1;
         public class SurfaceLoadoutPreset
         {
             public string section;
             public string key;
             public string value;
         }
-
         public void LoadFromJson()
         {
             try
@@ -36,11 +34,9 @@ namespace SurfaceLoadout
                 if (Config == null) return;
                 string baseDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "SurfaceLoadout");
                 if (!System.IO.Directory.Exists(baseDir)) return;
-
                 int count = 0;
                 var prop = typeof(ConfigFile).GetProperty("OrphanedEntries", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 var orphaned = prop?.GetValue(Config) as Dictionary<ConfigDefinition, string>;
-
                 if (orphaned != null)
                 {
                     foreach (string file in System.IO.Directory.GetFiles(baseDir, "*.json", System.IO.SearchOption.AllDirectories))
@@ -72,9 +68,7 @@ namespace SurfaceLoadout
                 Logger.LogError("Failed to load SurfaceLoadout json: " + ex);
             }
         }
-
         private static string SafeFileName(string name) => string.Join("_", (name ?? "").Split(System.IO.Path.GetInvalidFileNameChars()));
-
         public void SaveToJson()
         {
             if (Instance == null || Instance.Config == null || !isConfigsInitialized) return;
@@ -82,13 +76,11 @@ namespace SurfaceLoadout
             {
                 string baseDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "SurfaceLoadout");
                 System.IO.Directory.CreateDirectory(baseDir);
-
                 var entries = new Dictionary<ConfigDefinition, string>();
                 foreach (var def in Instance.Config.Keys)
                 {
                     entries[def] = Instance.Config[def].GetSerializedValue();
                 }
-
                 var prop = typeof(ConfigFile).GetProperty("OrphanedEntries", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 if (prop != null)
                 {
@@ -101,19 +93,15 @@ namespace SurfaceLoadout
                         }
                     }
                 }
-
                 foreach (var kvp in entries)
                 {
                     var def = kvp.Key;
                     string val = kvp.Value;
-
                     string sectionName = def.Section;
                     string folderName = SafeFileName(sectionName);
                     string fileName = SafeFileName(def.Key) + ".json";
-
                     string targetDir = System.IO.Path.Combine(baseDir, folderName);
                     System.IO.Directory.CreateDirectory(targetDir);
-
                     string filePath = System.IO.Path.Combine(targetDir, fileName);
                     var preset = new SurfaceLoadoutPreset { section = def.Section, key = def.Key, value = val };
                     string json = UnityEngine.JsonUtility.ToJson(preset, true);
@@ -125,14 +113,12 @@ namespace SurfaceLoadout
                 Logger.LogError("Failed to save to SurfaceLoadout folder: " + ex);
             }
         }
-
         public class LauncherConfig
         {
             public ConfigEntry<string> MissileName;
             public ConfigEntry<int> MaxAmmo;
             public MissileDefinition GetMissileDef() => Instance.allMissiles.FirstOrDefault(m => Instance.GetMissileDisplayName(m) == MissileName.Value);
         }
-
         public string GetMissileDisplayName(MissileDefinition m)
         {
             if (m == null) return "None";
@@ -141,18 +127,25 @@ namespace SurfaceLoadout
             if (rawName.Length > 40) return rawName.Substring(0, 37) + "...";
             return rawName;
         }
-
         public Dictionary<string, Dictionary<string, LauncherConfig>> UnitConfigs = new Dictionary<string, Dictionary<string, LauncherConfig>>();
-
         private void Awake()
         {
             Instance = this;
-
             LoadFromJson();
-
+            var harmony = new Harmony(PluginGuid);
+            harmony.PatchAll();
+            var runnerType = AccessTools.TypeByName("Blueprinter.PatchRunner");
+            var applyOps = runnerType == null ? null : AccessTools.Method(runnerType, "ApplyAllOps");
+            if (applyOps != null)
+            {
+                harmony.Patch(applyOps, postfix: new HarmonyMethod(
+                    AccessTools.Method(typeof(SurfaceLoadoutPlugin), nameof(OnBlueprinterOpsDone))));
+            }
+            else
+            {
+                blueprinterDone = true;
+            }
             Config.SettingChanged += (sender, args) => { SaveToJson(); };
-
-            
             string newCfgPath = Path.Combine(BepInEx.Paths.ConfigPath, "surface.loadout.cfg");
             try
             {
@@ -169,17 +162,18 @@ namespace SurfaceLoadout
                         Logger.LogInfo($"Successfully migrated and deleted old configuration file: {Path.GetFileName(oldCfgPath)}");
                     }
                 }
-                
                 Config.Reload();
             }
             catch (Exception e)
             {
                 Logger.LogError($"Error migrating old config: {e.Message}");
             }
-
             StartCoroutine(InitLoadouts());
         }
-
+        public static void OnBlueprinterOpsDone()
+        {
+            blueprinterDone = true;
+        }
         private string GetRelativePath(Transform t, Transform root)
         {
             string path = t.name + "_" + t.GetSiblingIndex();
@@ -190,50 +184,46 @@ namespace SurfaceLoadout
             }
             return path;
         }
-
         private IEnumerator InitLoadouts()
         {
-            UnitDefinition[] units = null;
-            while (true)
+            while (Encyclopedia.Lookup == null || Encyclopedia.Lookup.Count == 0)
             {
-                units = Resources.FindObjectsOfTypeAll<UnitDefinition>();
-                if (units != null && units.Length > 0)
-                    break;
-                yield return new WaitForSeconds(2f);
+                yield return new WaitForSeconds(0.5f);
             }
-
-            allMissiles = Resources.FindObjectsOfTypeAll<MissileDefinition>().ToList();
+            float waited = 0f;
+            while (!blueprinterDone && waited < 600f)
+            {
+                yield return new WaitForSeconds(0.5f);
+                waited += 0.5f;
+            }
+            ScanUnits("Init");
+            isConfigsInitialized = true;
+            SaveToJson();
+        }
+        private int ScanUnits(string source)
+        {
+            allMissiles = Encyclopedia.i.missiles;
             missileNames = allMissiles.Select(m => GetMissileDisplayName(m)).Distinct().ToList();
             missileNames.Sort();
-
             int moddedCount = 0;
-
-            
-            var sortedUnits = units.Where(u => !(u is AircraftDefinition || u is MissileDefinition) && u.unitPrefab != null)
+            var sortedUnits = Encyclopedia.Lookup.Values.Where(u => !(u is AircraftDefinition || u is MissileDefinition) && u.unitPrefab != null)
                                    .OrderBy(u => {
                                        string key = string.IsNullOrEmpty(u.jsonKey) ? (u.unitPrefab != null ? u.unitPrefab.name : u.name) : u.jsonKey;
                                        return string.IsNullOrEmpty(u.unitName) ? key : $"{u.unitName} ({key})";
                                    }, StringComparer.OrdinalIgnoreCase)
                                    .ToList();
-
             foreach (var unitDef in sortedUnits)
             {
+                if (UnitConfigs.ContainsKey(unitDef.name)) continue;
                 var prefabLaunchers = unitDef.unitPrefab.GetComponentsInChildren<MissileLauncher>(true);
-                
                 if (prefabLaunchers.Length == 0) continue;
-
                 string key = string.IsNullOrEmpty(unitDef.jsonKey) ? (unitDef.unitPrefab != null ? unitDef.unitPrefab.name : unitDef.name) : unitDef.jsonKey;
                 string configCategory = string.IsNullOrEmpty(unitDef.unitName) ? key : $"{unitDef.unitName} ({key})";
-
                 UnitConfigs[unitDef.name] = new Dictionary<string, LauncherConfig>();
-
                 List<LauncherInfo> launcherInfos = new List<LauncherInfo>();
-                
-                
                 for (int i = 0; i < prefabLaunchers.Length; i++)
                 {
                     string mName = prefabLaunchers[i].missile != null ? GetMissileDisplayName(prefabLaunchers[i].missile) : "None";
-                    
                     var t = Traverse.Create(prefabLaunchers[i]);
                     int calculatedAmmo = prefabLaunchers[i].ammo;
                     if (calculatedAmmo == 0)
@@ -249,20 +239,16 @@ namespace SurfaceLoadout
                                 calculatedAmmo = cols * rows;
                         }
                     }
-
                     launcherInfos.Add(new LauncherInfo
                     {
                         Path = GetRelativePath(prefabLaunchers[i].transform, unitDef.unitPrefab.transform),
                         OriginalMissileName = mName,
                         OriginalMaxAmmo = calculatedAmmo
                     });
-                    
                     if (!missileNames.Contains(mName))
                         missileNames.Add(mName);
                 }
-
                 var grouped = launcherInfos.GroupBy(l => l.OriginalMissileName + "_" + l.OriginalMaxAmmo);
-
                 int groupIndex = 1;
                 foreach (var group in grouped)
                 {
@@ -270,26 +256,21 @@ namespace SurfaceLoadout
                     string defaultMissile = first.OriginalMissileName;
                     int defaultAmmo = first.OriginalMaxAmmo;
                     int launcherCount = group.Count();
-
                     string symmetryText = launcherCount > 1 ? $" ({launcherCount}x Symmetrical)" : "";
                     string groupTitle = $"Group {groupIndex} ({defaultMissile} x{defaultAmmo}){symmetryText}";
-
                     var configMissile = Config.Bind(
                         configCategory, 
                         $"{groupTitle} - Missile Type", 
                         defaultMissile, 
                         new ConfigDescription($"Missile type for this launcher group", 
                             new AcceptableValueList<string>(missileNames.ToArray())));
-
                     var configAmmo = Config.Bind(
                         configCategory, 
                         $"{groupTitle} - Max Ammo", 
                         defaultAmmo, 
                         $"Amount of ammo for this launcher group");
-
                     configMissile.SettingChanged += (sender, args) => ApplyToUnit(unitDef);
                     configAmmo.SettingChanged += (sender, args) => ApplyToUnit(unitDef);
-
                     foreach (var info in group)
                     {
                         UnitConfigs[unitDef.name][info.Path] = new LauncherConfig
@@ -300,25 +281,45 @@ namespace SurfaceLoadout
                     }
                     groupIndex++;
                 }
-
                 ApplyToUnit(unitDef);
                 moddedCount++;
             }
-
-            Logger.LogInfo($"Surface Loadout initialized. Modded {moddedCount} surface units. Found {allMissiles.Count} projectiles.");
-            
-            isConfigsInitialized = true;
-            SaveToJson();
+            RefreshMissileChoices();
+            if (moddedCount > 0)
+                Logger.LogInfo($"Surface Loadout [{source}]: modded {moddedCount} surface units. Found {allMissiles.Count} projectiles.");
+            return moddedCount;
         }
-
+        private void RefreshMissileChoices()
+        {
+            if (missileNames.Count <= lastMissileCount) return;
+            lastMissileCount = missileNames.Count;
+            var setter = AccessTools.PropertySetter(typeof(ConfigEntryBase), "Description");
+            if (setter == null) return;
+            var seen = new HashSet<ConfigEntry<string>>();
+            var choices = missileNames.ToArray();
+            foreach (var unit in UnitConfigs.Values)
+            {
+                foreach (var config in unit.Values)
+                {
+                    if (config.MissileName == null || !seen.Add(config.MissileName)) continue;
+                    setter.Invoke(config.MissileName, new object[] {
+                        new ConfigDescription(config.MissileName.Description.Description,
+                                              new AcceptableValueList<string>(choices)) });
+                }
+            }
+        }
+        internal void RescanLate()
+        {
+            if (!isConfigsInitialized || Encyclopedia.Lookup == null) return;
+            if (ScanUnits("Rescan") > 0)
+                SaveToJson();
+        }
         public void ApplyToUnit(UnitDefinition unitDef)
         {
             if (unitDef == null) return;
             string uName = unitDef.name;
-
             if (UnitConfigs.TryGetValue(uName, out var launcherConfigs))
             {
-                
                 if (unitDef.unitPrefab != null)
                 {
                     var prefabLaunchers = unitDef.unitPrefab.GetComponentsInChildren<MissileLauncher>(true);
@@ -349,8 +350,6 @@ namespace SurfaceLoadout
                         }
                     }
                 }
-
-                
                 foreach (var activeUnit in FindObjectsOfType<Unit>())
                 {
                     if (activeUnit.definition != null && activeUnit.definition.name == uName)
@@ -379,11 +378,8 @@ namespace SurfaceLoadout
                                         }
                                     }
                                 }
-                                
                                 Traverse.Create(launcher).Field("maxAmmo").SetValue(config.MaxAmmo.Value);
                                 Traverse.Create(launcher).Field("ammo").SetValue(config.MaxAmmo.Value);
-                                
-                                
                                 if (activeUnit.weaponStations != null)
                                 {
                                     foreach (var station in activeUnit.weaponStations)
@@ -403,12 +399,20 @@ namespace SurfaceLoadout
                 }
             }
         }
-
         private class LauncherInfo
         {
             public string Path;
             public string OriginalMissileName;
             public int OriginalMaxAmmo;
+        }
+    }
+    [HarmonyPatch(typeof(LoadoutSelector), "AssignAircraft")]
+    public static class LoadoutSelectorRescanPatch
+    {
+        [HarmonyPrefix]
+        public static void Prefix()
+        {
+            SurfaceLoadoutPlugin.Instance?.RescanLate();
         }
     }
 }
